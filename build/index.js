@@ -16,53 +16,84 @@ const express_1 = __importDefault(require("express"));
 const server_1 = require("@apollo/server");
 const express4_1 = require("@apollo/server/express4");
 const db_1 = require("./lib/db");
+const node_crypto_1 = require("node:crypto");
+const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const JWT_SECRET = '$superlam@284';
+class UserService {
+    static createUser(payload) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const { firstName, lastName, email, password } = payload;
+            const salt = (0, node_crypto_1.randomBytes)(32).toString('hex');
+            const hashedPassword = (0, node_crypto_1.createHmac)('sha256', salt).update(password).digest("hex");
+            return db_1.prismaClient.user.create({
+                data: {
+                    firstName,
+                    lastName,
+                    email,
+                    password: hashedPassword,
+                    salt
+                }
+            });
+        });
+    }
+    static getUserToken(payload) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const { email, password } = payload;
+            const user = yield db_1.prismaClient.user.findUnique({ where: { email } });
+            if (!user)
+                throw new Error('User not found');
+            const hashedPassword = (0, node_crypto_1.createHmac)('sha256', user.salt).update(password).digest("hex");
+            if (hashedPassword !== user.password)
+                throw new Error('Incorrect password');
+            const token = jsonwebtoken_1.default.sign({ id: user.id, email: user.email }, JWT_SECRET);
+            return token;
+        });
+    }
+}
 function init() {
     return __awaiter(this, void 0, void 0, function* () {
         const app = (0, express_1.default)();
         const PORT = Number(process.env.PORT) || 8000;
-        // creating graphql server from documentation 
         const gqlServer = new server_1.ApolloServer({
             typeDefs: `
-          type Query { 
-            hello: String
-            say(name: String!): String
-          }
-          type Mutation {
-            createUser(firstName: String!, lastName: String!, email: String!, password: String!): Boolean
-          }
-        `, // schema
+            type Query {
+                getUserToken(email: String!, password: String!): String
+            }
+            type Mutation {
+                createUser(firstName: String!, lastName: String, email: String!, password: String!): Boolean
+            }
+        `,
             resolvers: {
                 Query: {
-                    hello: () => `Hey there, I am a GraphQL server illaya`,
-                    say: (_, { name }) => `Hey ${name}, How are u ilka?`
+                    getUserToken: (_, payload) => __awaiter(this, void 0, void 0, function* () {
+                        try {
+                            const token = yield UserService.getUserToken(payload);
+                            return token;
+                        }
+                        catch (error) {
+                            console.error('Error in getUserToken:', error);
+                            throw new Error('Authentication failed');
+                        }
+                    })
                 },
                 Mutation: {
-                    createUser: (_1, _a) => __awaiter(this, [_1, _a], void 0, function* (_, { firstName, lastName, email, password }) {
-                        yield db_1.prismaClient.user.create({
-                            data: {
-                                email,
-                                firstName,
-                                lastName,
-                                password,
-                                salt: "random_salt",
-                            },
-                        });
-                        return true;
+                    createUser: (_, payload) => __awaiter(this, void 0, void 0, function* () {
+                        try {
+                            yield UserService.createUser(payload);
+                            return true;
+                        }
+                        catch (error) {
+                            console.error('Error in createUser:', error);
+                            return false;
+                        }
                     })
                 }
             },
-        }); // schema layer
+        });
         app.use(express_1.default.json());
-        // start the gql server , should make it globally 
         yield gqlServer.start();
-        app.get("/", (req, res) => {
-            res.json({ message: "Server is up and running" });
-        });
-        // opening the port to communicate : mouth opener in figure
         app.use('/graphql', (0, express4_1.expressMiddleware)(gqlServer));
-        app.listen(PORT, () => {
-            console.log(`Server started at port ${PORT}`);
-        });
+        app.listen(PORT, () => console.log(`Server started at port ${PORT}`));
     });
 }
 init();
