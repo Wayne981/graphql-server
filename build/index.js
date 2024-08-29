@@ -36,6 +36,9 @@ class UserService {
             });
         });
     }
+    static getUserById(id) {
+        return db_1.prismaClient.user.findUnique({ where: { id } });
+    }
     static getUserToken(payload) {
         return __awaiter(this, void 0, void 0, function* () {
             const { email, password } = payload;
@@ -49,50 +52,97 @@ class UserService {
             return token;
         });
     }
+    static decodeJWTToken(token) {
+        const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
+        if (typeof decoded === 'string') {
+            throw new Error('Invalid token');
+        }
+        return decoded;
+    }
+}
+const typeDefs = `
+    type User {
+        id: ID!
+        firstName: String!
+        lastName: String
+        email: String!
+        profileImageURL: String
+    }
+
+    type Query {
+        getUserToken(email: String!, password: String!): String
+        getCurrentLoggedInUser: User
+    }
+
+    type Mutation {
+        createUser(firstName: String!, lastName: String, email: String!, password: String!): Boolean
+    }
+`;
+const resolvers = {
+    Query: {
+        getUserToken: (_, payload) => __awaiter(void 0, void 0, void 0, function* () {
+            try {
+                const token = yield UserService.getUserToken(payload);
+                return token;
+            }
+            catch (error) {
+                console.error('Error in getUserToken:', error);
+                throw new Error('Authentication failed');
+            }
+        }),
+        getCurrentLoggedInUser: (_, parameters, context) => __awaiter(void 0, void 0, void 0, function* () {
+            if (context && context.user) {
+                return context.user;
+            }
+            throw new Error('Not authenticated');
+        }),
+    },
+    Mutation: {
+        createUser: (_, payload) => __awaiter(void 0, void 0, void 0, function* () {
+            try {
+                yield UserService.createUser(payload);
+                return true;
+            }
+            catch (error) {
+                console.error('Error in createUser:', error);
+                return false;
+            }
+        })
+    }
+};
+function createApolloGraphqlServer() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const server = new server_1.ApolloServer({
+            typeDefs,
+            resolvers,
+        });
+        yield server.start();
+        return server;
+    });
 }
 function init() {
     return __awaiter(this, void 0, void 0, function* () {
         const app = (0, express_1.default)();
         const PORT = Number(process.env.PORT) || 8000;
-        const gqlServer = new server_1.ApolloServer({
-            typeDefs: `
-            type Query {
-                getUserToken(email: String!, password: String!): String
-            }
-            type Mutation {
-                createUser(firstName: String!, lastName: String, email: String!, password: String!): Boolean
-            }
-        `,
-            resolvers: {
-                Query: {
-                    getUserToken: (_, payload) => __awaiter(this, void 0, void 0, function* () {
-                        try {
-                            const token = yield UserService.getUserToken(payload);
-                            return token;
-                        }
-                        catch (error) {
-                            console.error('Error in getUserToken:', error);
-                            throw new Error('Authentication failed');
-                        }
-                    })
-                },
-                Mutation: {
-                    createUser: (_, payload) => __awaiter(this, void 0, void 0, function* () {
-                        try {
-                            yield UserService.createUser(payload);
-                            return true;
-                        }
-                        catch (error) {
-                            console.error('Error in createUser:', error);
-                            return false;
-                        }
-                    })
-                }
-            },
-        });
         app.use(express_1.default.json());
-        yield gqlServer.start();
-        app.use('/graphql', (0, express4_1.expressMiddleware)(gqlServer));
+        app.use('/graphql', (0, express4_1.expressMiddleware)(yield createApolloGraphqlServer(), {
+            context: (_a) => __awaiter(this, [_a], void 0, function* ({ req }) {
+                const token = req.headers['token'];
+                try {
+                    if (typeof token === 'string') {
+                        const decoded = UserService.decodeJWTToken(token);
+                        if (decoded && typeof decoded.id === 'string') {
+                            const user = yield UserService.getUserById(decoded.id);
+                            return { user };
+                        }
+                    }
+                }
+                catch (error) {
+                    console.error('Error in context:', error);
+                }
+                return {};
+            })
+        }));
         app.listen(PORT, () => console.log(`Server started at port ${PORT}`));
     });
 }
